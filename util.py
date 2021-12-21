@@ -126,6 +126,33 @@ def find_nearest_feature_old(
     return feature
 
 
+def find_nearest_feature_from_features(geometry, features):
+    """
+    :param geometry:
+    :type geometry: QgsGeometry
+
+    :param features:
+    :type features: list
+
+    :return:
+    :rtype: QgsFeature
+    """
+
+    min_distance = sys.float_info.max
+    nearest_feature = None
+
+    for feature in features:
+        dist = feature.geometry().distance(geometry)
+        log_message("current " + str(dist))
+
+        if dist < min_distance:
+            min_distance = dist
+            nearest_feature = feature
+            log_message("min dist: " + str(dist))
+
+    return nearest_feature
+
+
 def find_nearest_feature(geometry, layer):
     """
     :param geometry:
@@ -160,6 +187,7 @@ def find_nearest_edge_from_multi_polygon(point_geometry, multipolygon_geometry):
     @return list of QgsPointXY
     """
 
+    log_message(str(multipolygon_geometry.wkbType()))
     assert multipolygon_geometry.wkbType() == QgsWkbTypes.MultiPolygon, "error"
 
     multipolygon = multipolygon_geometry.asMultiPolygon()

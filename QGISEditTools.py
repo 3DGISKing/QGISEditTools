@@ -4,7 +4,7 @@ import os
 import math
 
 # noinspection PyUnresolvedReferences
-from PyQt5.QtCore import pyqtSlot, QSettings, QDate, QLocale, QTranslator, QCoreApplication, Qt, QVariant
+from PyQt5.QtCore import pyqtSlot, QSettings, QDate, QLocale, QTranslator, QCoreApplication, Qt, QTimer, QVariant
 
 # noinspection PyUnresolvedReferences
 from PyQt5.QtGui import (QIcon, QColor, QCursor, QPixmap)
@@ -18,16 +18,16 @@ from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsM
     QgsWkbTypes, QgsPoint, QgsVectorLayerEditUtils
 
 # noinspection PyUnresolvedReferences
-from qgis.gui import QgsRubberBand, QgsMapToolEmitPoint, QgsVertexMarker
+from qgis.gui import QgsHighlight, QgsRubberBand, QgsMapToolEmitPoint, QgsVertexMarker
 
 # noinspection PyUnresolvedReferences
 from PyQt5 import QtGui, QtWidgets
 
 from qgis.core import QgsWkbTypes
 from qgis.core import QgsVectorLayer
-from qgis.core import QgsProject, QgsMessageLog, QgsFeature, QgsGeometry, QgsField, QgsVectorLayerUtils
+from qgis.core import QgsProject, QgsMessageLog, QgsFeature, QgsGeometry, QgsField, QgsVectorLayerUtils,QgsRectangle
 
-from .util import distance_between_two_points, find_nearest_feature, find_nearest_edge_from_multi_polygon,find_perpendicular_point, generate_intersects, log_message
+from .util import distance_between_two_points, find_nearest_feature_from_features, find_nearest_edge_from_multi_polygon,find_perpendicular_point, generate_intersects, log_message
 
 
 class QGISEditTools:
@@ -77,6 +77,11 @@ class QGISEditTools:
         self._action_divide.triggered.connect(self.on_action_divide_triggered)
         self.reference_line_selector.canvasClicked.connect(self.on_reference_line_selector_canvas_clicked)
 
+        self._flash_timer = QTimer(self.map_canvas)
+        self._flash_timer.timeout.connect(self._on_flash_timer_timeouted)
+
+        self._highlight_list = []
+
     def unload(self):
         self.map_canvas.scene().removeItem(self.reference_line_marker)
         self.map_canvas.scene().removeItem(self.line_rubber_band)
@@ -108,6 +113,12 @@ class QGISEditTools:
                 QMessageBox.information(self._iface.mainWindow(), 'Info', 'Selected layer is not Polygon layer!')
                 return
 
+        selected_features = active_layer.selectedFeatures()
+
+        if len(selected_features) == 0:
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "No selected")
+            return
+
         self.map_canvas.setMapTool(self.reference_line_selector)
 
     def on_action_reference_line_selector_triggered(self):
@@ -126,12 +137,20 @@ class QGISEditTools:
 
         active_layer = self._iface.activeLayer()
 
-        point_geometry = QgsGeometry.fromPointXY(point)
-        nearest_polygon_feature = find_nearest_feature(point_geometry, active_layer)
-        dist = nearest_polygon_feature.geometry().distance(point_geometry)
-        tolerance = 1
+        if active_layer is None:
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "No selected layer")
+            return
 
-        log_message("dist " + str(dist))
+        selected_features = active_layer.selectedFeatures()
+
+        if len(selected_features) == 0:
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "No selected")
+            return
+
+        point_geometry = QgsGeometry.fromPointXY(point)
+        nearest_feature = find_nearest_feature_from_features(point_geometry, selected_features)
+        dist = nearest_feature.geometry().distance(point_geometry)
+        tolerance = 1
 
         if dist > tolerance:
             log_message("failed to find nearest_polygon_feature")
@@ -140,7 +159,7 @@ class QGISEditTools:
 
         # get start and end of nearest edge of the nearest polygon
 
-        nearest_edge = find_nearest_edge_from_multi_polygon(point_geometry, nearest_polygon_feature.geometry())
+        nearest_edge = find_nearest_edge_from_multi_polygon(point_geometry, nearest_feature.geometry())
 
         start_point = nearest_edge[0]
         end_point = nearest_edge[1]
@@ -159,6 +178,8 @@ class QGISEditTools:
 
         distance, ok = QInputDialog.getDouble(self._iface.mainWindow(), "Input", "enter a distance")
 
+        distance = -distance
+
         if not ok:
             self.hide_all_marker_rubber_band()
             return
@@ -169,7 +190,7 @@ class QGISEditTools:
         offset_edge_start = offset_edge.asPolyline()[0]
         offset_edge_end = offset_edge.asPolyline()[1]
 
-        bounding_box = nearest_polygon_feature.geometry().boundingBox()
+        bounding_box = nearest_feature.geometry().boundingBox()
 
         extend_length = max(bounding_box.width(), bounding_box.height())
 
@@ -194,7 +215,7 @@ class QGISEditTools:
 
         # split polygon by line
 
-        geom = nearest_polygon_feature.geometry()
+        geom = nearest_feature.geometry()
         success, split_geometry_list, topo = geom.splitGeometry(cut_line.asPolyline(), False)
 
         if success != QgsGeometry.OperationResult.Success:
@@ -209,7 +230,7 @@ class QGISEditTools:
 
         active_layer.startEditing()
 
-        active_layer.changeGeometry(nearest_polygon_feature.id(), geom)
+        active_layer.changeGeometry(nearest_feature.id(), geom)
 
         feature = QgsVectorLayerUtils.createFeature(active_layer)
 
@@ -217,6 +238,34 @@ class QGISEditTools:
         active_layer.addFeature(feature)
 
         active_layer.commitChanges()
+
+        active_layer.removeSelection()
+
+        # feature_ids = [nearest_feature.id(), feature.id()]
+        # self.map_canvas.flashFeatureIds(active_layer, feature_ids)
+
+        self.hide_all_marker_rubber_band()
+        self._flash_geometries(active_layer, [geom, split_geometry_list[0]])
+
+    def _on_flash_timer_timeouted(self):
+        self._flash_timer.stop()
+
+        for item in self._highlight_list:
+            self.map_canvas.scene().removeItem(item)
+
+        self._highlight_list = []
+
+        log_message("_on_flash_timer_timeouted")
+
+    def _flash_geometries(self, layer, geometries):
+        for geometry in geometries:
+            h = QgsHighlight(self.map_canvas, geometry, layer)
+            h.setColor(QColor(255, 0, 0, 255))
+            h.setWidth(5)
+            h.setFillColor(QColor(255, 0, 0, 100))
+            self._highlight_list.append(h)
+
+        self._flash_timer.start(2000)  # Milliseconds before finishing the flash
 
 
 if __name__ == '__main__':
