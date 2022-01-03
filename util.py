@@ -1,8 +1,8 @@
 import sys
 import math
 
-from qgis.core import QgsGeometry, QgsFeature, QgsPoint, QgsPointXY,\
-    QgsSpatialIndex, QgsFeatureRequest, QgsMessageLog, QgsGeometryUtils,\
+from qgis.core import QgsGeometry, QgsFeature, QgsPoint, QgsPointXY, \
+    QgsSpatialIndex, QgsFeatureRequest, QgsMessageLog, QgsGeometryUtils, \
     QgsVectorLayer, QgsWkbTypes
 
 RADIUS = 0.25
@@ -88,7 +88,7 @@ def divide(polygon_feature, num_1000_value):
 
 
 def log_message(msg):
-    QgsMessageLog.logMessage(msg, "WaterQuickEdit")
+    QgsMessageLog.logMessage(msg, "QGISEditTool")
 
 
 def find_perpendicular_point(point_feature, line_layer):
@@ -143,13 +143,9 @@ def find_nearest_feature_from_features(geometry, features):
 
     for feature in features:
         dist = feature.geometry().distance(geometry)
-        log_message("current " + str(dist))
-
         if dist < min_distance:
             min_distance = dist
             nearest_feature = feature
-            log_message("min dist: " + str(dist))
-
     return nearest_feature
 
 
@@ -180,14 +176,17 @@ def find_nearest_feature(geometry, layer):
     return nearest_feature
 
 
-def find_nearest_edge_from_multi_polygon(point_geometry, multipolygon_geometry):
+def find_nearest_edge_from_multi_polygon(point, features):
     """
-    @param point_geometry: QgsGeometry
-    @param multipolygon_geometry: QgsGeometry
+    @param point: QgsGeometry
+    @param features: QgsGeometry
     @return list of QgsPointXY
     """
 
-    log_message(str(multipolygon_geometry.wkbType()))
+    point_geometry = QgsGeometry.fromPointXY(point)
+    nearest_feature = find_nearest_feature_from_features(point_geometry, features)
+    multipolygon_geometry = nearest_feature.geometry()
+
     assert multipolygon_geometry.wkbType() == QgsWkbTypes.MultiPolygon, "error"
 
     multipolygon = multipolygon_geometry.asMultiPolygon()
@@ -212,8 +211,6 @@ def find_nearest_edge_from_multi_polygon(point_geometry, multipolygon_geometry):
         distance = line_segment_geometry.distance(point_geometry)
 
         if distance < min_distance:
-            log_message(str(distance))
-
             min_distance = distance
             min_start_point = start_point
             min_end_point = end_point
@@ -221,7 +218,7 @@ def find_nearest_edge_from_multi_polygon(point_geometry, multipolygon_geometry):
     return [min_start_point, min_end_point]
 
 
-def find_nearest_line_segment(point_geometry,  multipolyline_feature):
+def find_nearest_line_segment(point_geometry, multipolyline_feature):
     """
     :param point_geometry:
     :type point_geometry: QgsPointXY
@@ -300,7 +297,8 @@ def generate_intersects(feature1, feature2):
 
 
 def distance_between_two_points(start_p, end_p):
-    length = (start_p.x() - end_p.x()) * (start_p.x() - end_p.x()) + (start_p.y() - end_p.y()) * (start_p.y() - end_p.y())
+    length = (start_p.x() - end_p.x()) * (start_p.x() - end_p.x()) + (start_p.y() - end_p.y()) * (
+                start_p.y() - end_p.y())
 
     return math.sqrt(length)
 
@@ -348,10 +346,10 @@ def generate_intersects_points(polyline_xy1, polyline_xy2):
             radius_start_p_x = start_point_2.x() + (distance_from_start_to_intersection_2 - RADIUS) * (
                     end_point_2.x() - start_point_2.x()) / distance
             radius_start_p_y = start_point_2.y() + (distance_from_start_to_intersection_2 - RADIUS) * (
-                        end_point_2.y() - start_point_2.y()) / distance
+                    end_point_2.y() - start_point_2.y()) / distance
 
             radius_end_p_x = start_point_2.x() + (distance_from_start_to_intersection_2 + RADIUS) * (
-                        end_point_2.x() - start_point_2.x()) / distance
+                    end_point_2.x() - start_point_2.x()) / distance
             radius_end_p_y = start_point_2.y() + (distance_from_start_to_intersection_2 + RADIUS) * (
                     end_point_2.y() - start_point_2.y()) / distance
 
@@ -389,8 +387,114 @@ def generate_intersects_points(polyline_xy1, polyline_xy2):
             return result_polyline
 
 
+def cut_polygon(polygon_geometry, start_point_of_edge, end_point_edge, distance):
+    distance = -distance
+
+    edge = QgsGeometry.fromPolylineXY([start_point_of_edge, end_point_edge])
+
+    offset_edge = edge.offsetCurve(distance, 8, QgsGeometry.JoinStyleRound, 5.0)
+
+    offset_edge_start = offset_edge.asPolyline()[0]
+    offset_edge_end = offset_edge.asPolyline()[1]
+
+    bounding_box = polygon_geometry.boundingBox()
+
+    extend_length = max(bounding_box.width(), bounding_box.height())
+
+    edge_length = distance_between_two_points(start_point_of_edge, end_point_edge)
+
+    # get mid point of the offset_edge
+    mid_x = (offset_edge_start.x() + offset_edge_end.x()) / 2
+    mid_y = (offset_edge_start.y() + offset_edge_end.y()) / 2
+
+    # extend offset_edge by edge_length / 2
+    new_start_x = offset_edge_start.x() + (offset_edge_start.x() - mid_x) / (edge_length / 2) * extend_length
+    new_start_y = offset_edge_start.y() + (offset_edge_start.y() - mid_y) / (edge_length / 2) * extend_length
+
+    new_end_x = offset_edge_end.x() + (offset_edge_end.x() - mid_x) / (edge_length / 2) * extend_length
+    new_end_y = offset_edge_end.y() + (offset_edge_end.y() - mid_y) / (edge_length / 2) * extend_length
+
+    cut_line = QgsGeometry.fromPolylineXY([QgsPointXY(new_start_x, new_start_y), QgsPointXY(new_end_x, new_end_y)])
+
+    #  success, split_geometry_list, topo
+    ret = polygon_geometry.splitGeometry(cut_line.asPolyline(), False)
+
+    # tuple add
+    ret = ret + (cut_line,)
+
+    return ret
 
 
+# check divided polygon area is smaller than area limit
+
+def cut_polygon_area_le_limit(polygon_geometry, start_point_of_edge, end_point_edge, distance, area_limit):
+    distance = -distance
+
+    success, split_geometry_list, topo, cut_line = cut_polygon(polygon_geometry, start_point_of_edge, end_point_edge,
+                                                               distance)
+
+    if success != QgsGeometry.OperationResult.Success:
+        log_message("no success")
+        return False
+
+    if len(split_geometry_list) != 1:
+        log_message("len invalid")
+        return False
+
+    area = split_geometry_list[0].area()
+
+    log_message("area: " + str(area) + " at distance :" + str(-distance))
+
+    return area <= area_limit
 
 
+TOLERANCE = 0.01
 
+
+def get_cut_distance_by_area_limit(polygon_feature, start_point_of_edge, end_point_edge, area_limit):
+    wkt = polygon_feature.geometry().asWkt()
+    geometry = QgsGeometry.fromWkt(wkt)
+    bounding_box = geometry.boundingBox()
+    max_area = bounding_box.width() * bounding_box.height()
+    min_width = area_limit / bounding_box.height()
+
+    distance_step = 0.1
+    distance = distance_step
+    area_error = area_limit
+
+    while area_error > TOLERANCE:
+        geometry = QgsGeometry.fromWkt(wkt)
+        success, split_geometry_list, topo, cut_line = cut_polygon(geometry, start_point_of_edge, end_point_edge,
+                                                                   distance)
+
+        if success != QgsGeometry.OperationResult.Success:
+            return -1
+
+        if len(split_geometry_list) != 1:
+            return -1
+
+        area = split_geometry_list[0].area()
+
+        while area <= area_limit:
+            distance += distance_step
+            geometry = QgsGeometry.fromWkt(wkt)
+            success, split_geometry_list, topo, cut_line = cut_polygon(geometry, start_point_of_edge, end_point_edge,
+                                                                       distance)
+
+            if success != QgsGeometry.OperationResult.Success:
+                return -1
+
+            if len(split_geometry_list) != 1:
+                return -1
+
+            area = split_geometry_list[0].area()
+
+        area_error = abs(area_limit - split_geometry_list[0].area())
+
+        log_message("area: " + str(area) + " error: " + str(area_error) + " at distance : " + str(distance))
+
+        # go back one step
+        distance = distance - distance_step
+        distance_step = distance_step / 10.0
+
+    return distance

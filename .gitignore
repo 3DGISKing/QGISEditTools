@@ -1,0 +1,15 @@
+/.idea/.gitignore
+/.idea/IROOMGIS_Tools.iml
+/.idea/QGISEditTools.iml
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/vcs.xml
+/QGISEditTools.zip
+/__pycache__/QGISEditTools.cpython-37.pyc
+/__pycache__/__init__.cpython-37.pyc
+/__pycache__/util.cpython-37.pyc
+/data/polygon.dbf
+/data/polygon.prj
+/data/polygon.shp
+/data/polygon.shx
