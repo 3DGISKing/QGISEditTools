@@ -28,6 +28,8 @@ from qgis.core import QgsVectorLayer
 from qgis.core import QgsProject, QgsMessageLog, QgsFeature, QgsGeometry, QgsField, QgsVectorLayerUtils,QgsRectangle
 from .util import get_cut_distance_by_area_limit, cut_polygon, distance_between_two_points, find_nearest_feature_from_features, find_nearest_edge_from_multi_polygon,find_perpendicular_point, generate_intersects, log_message
 
+TARGET_LAYER_NAME = "plantaciones"
+
 
 class QGISEditTools:
     def __init__(self, iface):
@@ -124,6 +126,16 @@ class QGISEditTools:
             QMessageBox.critical(self._iface.mainWindow(), 'Error', "No selected")
             return False
 
+        if active_layer.name() != "parcelas":
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "Failed to find parcelas layer!")
+            return False
+
+        layers = QgsProject.instance().mapLayersByName(TARGET_LAYER_NAME)
+
+        if len(layers) != 1:
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', 'failed to find ' + TARGET_LAYER_NAME)
+            return False
+
         return True
 
     def on_action_divide_by_distance_triggered(self):
@@ -156,7 +168,7 @@ class QGISEditTools:
         self.line_rubber_band.setToGeometry(polyline)
         self.line_rubber_band.show()
 
-    def on_reference_line_selector_canvas_clicked(self, point, button):
+    def on_reference_line_selector_canvas_clicked(self, point):
         """
         :type: QgsPointXY
         :param: point
@@ -235,28 +247,58 @@ class QGISEditTools:
             QMessageBox.critical(self._iface.mainWindow(), 'Error', "failed to split")
             return
 
-        active_layer = self._iface.activeLayer()
-        active_layer.startEditing()
+        layers = QgsProject.instance().mapLayersByName(TARGET_LAYER_NAME)
 
-        # selected feature's geometry changed
-        active_layer.changeGeometry(nearest_feature.id(), geometry)
+        target_layer = layers[0]
+
+        iterator = target_layer.getFeatures()
+
+        new_geometry = split_geometry_list[0]
+
+        for feature in iterator:
+            geom = feature.geometry()
+            if geom.contains(new_geometry):
+                QMessageBox.critical(self._iface.mainWindow(), 'Error', "feature which contains new geometry exists")
+                return
+
+        iterator = target_layer.getFeatures()
+
+        for feature in iterator:
+            geom = feature.geometry()
+
+            if geom.intersects(new_geometry):
+                if new_geometry.contains(geom):
+                    new_geometry = new_geometry.difference(geom)
+                else:
+                    new_geometry = new_geometry.difference(geom)
+
+                if new_geometry.lastError() != "":
+                    self.hide_all_marker_rubber_band()
+                    QMessageBox.critical(self._iface.mainWindow(), 'Error', new_geometry.lastError())
+                    return
+
+        if new_geometry.isEmpty() or new_geometry.area() < 0.1:
+            self.hide_all_marker_rubber_band()
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "Invalid geometry")
+            return
+
+        if not new_geometry.isGeosValid():
+            self.hide_all_marker_rubber_band()
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "Invalid geometry")
+            return
+
+        target_layer.startEditing()
 
         # add new feature
-        feature = QgsVectorLayerUtils.createFeature(active_layer)
+        feature = QgsVectorLayerUtils.createFeature(target_layer)
 
-        feature.setGeometry(split_geometry_list[0])
-        active_layer.addFeature(feature)
+        feature.setGeometry(new_geometry)
+        target_layer.addFeature(feature)
 
-        active_layer.commitChanges()
-
-        active_layer.removeSelection()
-
-        # feature_ids = [nearest_feature.id(), feature.id()]
-        # self.map_canvas.flashFeatureIds(active_layer, feature_ids)
+        target_layer.commitChanges()
 
         self.hide_all_marker_rubber_band()
-        self._flash_geometries(active_layer, [nearest_feature.geometry(), split_geometry_list[0]])
-        # self._flash_geometries(active_layer, [split_geometry_list[0]])
+        self._flash_geometries(target_layer, [nearest_feature.geometry(), new_geometry])
 
     def _on_flash_timer_timeout(self):
         self._flash_timer.stop()
