@@ -41,6 +41,7 @@ class QGISEditTools:
         self._divide_by_distance_button_clicked = False
         self._divide_by_area_button_clicked = False
         self._divide_by_distance1_button_clicked = False
+        self._divide_by_area1_button_clicked = False
 
     # noinspection PyAttributeOutsideInit
     # noinspection PyPep8Naming
@@ -50,12 +51,14 @@ class QGISEditTools:
         self._action_polygon_divide_by_area = QAction(QIcon(icon_path), 'Divide by area', self._iface.mainWindow())
         self._action_polygon_divide_by_distance1 = QAction(QIcon(icon_path), 'Divide by distance(New)',
                                                           self._iface.mainWindow())
+        self._action_polygon_divide_by_area1 = QAction(QIcon(icon_path), 'Divide by area(New)', self._iface.mainWindow())
 
         self._toolbar = self._iface.addToolBar(u'QGIS Edit')
 
         self._toolbar.addAction(self._action_polygon_divide_by_distance)
         self._toolbar.addAction(self._action_polygon_divide_by_distance1)
         self._toolbar.addAction(self._action_polygon_divide_by_area)
+        self._toolbar.addAction(self._action_polygon_divide_by_area1)
 
         self.reference_line_selector = QgsMapToolEmitPoint(self.map_canvas)
 
@@ -106,6 +109,7 @@ class QGISEditTools:
         self._action_polygon_divide_by_distance1.triggered.connect(self.on_action_divide_by_distance1_triggered)
 
         self._action_polygon_divide_by_area.triggered.connect(self.on_action_divide_by_area)
+        self._action_polygon_divide_by_area1.triggered.connect(self.on_action_divide_by_area1)
 
         self._flash_timer = QTimer(self.map_canvas)
         self._flash_timer.timeout.connect(self._on_flash_timer_timeout)
@@ -227,10 +231,12 @@ class QGISEditTools:
             self.divide_by_area(point)
         elif self._divide_by_distance1_button_clicked:
             self.divide_by_distance1(point)
+        elif self._divide_by_area1_button_clicked:
+            self.divide_by_area1(point)
 
     def divide_by_distance(self, point):
-        active_layer = self._iface.activeLayer()
-        selected_features = active_layer.selectedFeatures()
+        parcel_layer = self.get_parcel_layer()
+        selected_features = parcel_layer.selectedFeatures()
         nearest_feature = find_nearest_feature_from_features(QgsGeometry.fromPointXY(point), selected_features)
 
         # get start and end of nearest edge of the nearest polygon
@@ -251,8 +257,8 @@ class QGISEditTools:
         self._divide_by_distance_button_clicked = False
 
     def divide_by_area(self, point):
-        active_layer = self._iface.activeLayer()
-        selected_features = active_layer.selectedFeatures()
+        parcel_layer = self.get_parcel_layer()
+        selected_features = parcel_layer.selectedFeatures()
         nearest_feature = find_nearest_feature_from_features(QgsGeometry.fromPointXY(point), selected_features)
 
         # get start and end of nearest edge of the nearest polygon
@@ -279,8 +285,12 @@ class QGISEditTools:
         self.do_cut_polygon(nearest_feature, nearest_edge, distance)
         self._divide_by_area_button_clicked = False
 
-    # point 's type QgsPointXY
-    def divide_by_distance1(self, point):
+    def get_parcel_layer(self):
+        layers = QgsProject.instance().mapLayersByName(PARCEL_LAYER_NAME)
+
+        return layers[0]
+
+    def get_nearest_edge_in_target_layer(self, point):
         layers = QgsProject.instance().mapLayersByName(TARGET_LAYER_NAME)
 
         plantaciones_layer = layers[0]
@@ -293,14 +303,80 @@ class QGISEditTools:
             if feature.geometry().contains(point):
                 features.append(feature)
 
+        # check if list is empty
+        if not features:
+            return None
+
         # get start and end of nearest edge of the nearest polygon
         nearest_edge = find_nearest_edge_from_multi_polygon(point, features)
 
         if nearest_edge is None:
-            QMessageBox.critical(self._iface.mainWindow(), 'Error', "fails to find nearest edge. please select edge within polygon")
+            return None
+
+        return [nearest_edge[1], nearest_edge[0]]
+
+    def get_nearest_feature_in_parcel_layer(self, point):
+        layers = QgsProject.instance().mapLayersByName(PARCEL_LAYER_NAME)
+        parcel_layer = layers[0]
+
+        selected_features = parcel_layer.selectedFeatures()
+
+        # assume that selected_features is not empty
+        return find_nearest_feature_from_features(QgsGeometry.fromPointXY(point), selected_features)
+
+    def divide_by_area1(self, point):
+        nearest_edge = self.get_nearest_edge_in_target_layer(point)
+
+        if nearest_edge is None:
+            QMessageBox.critical(self._iface.mainWindow(), 'Error',
+                                 "fails to find nearest edge. please select edge within polygon of " + TARGET_LAYER_NAME + " layer")
             return
 
-        nearest_edge = [nearest_edge[1], nearest_edge[0]]
+        self.mark_reference_line(nearest_edge)
+
+        area, ok = QInputDialog.getDouble(self._iface.mainWindow(), "Input", "enter a area1")
+
+        if area < 0:
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "Invalid area!")
+            return
+
+        nearest_feature = self.get_nearest_feature_in_parcel_layer(point)
+
+        if area > nearest_feature.geometry().area():
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "Invalid area!. Selected feature 's area is " +
+                                 str(nearest_feature.geometry().area()))
+            return
+
+        if not ok:
+            self.hide_all_marker_rubber_band()
+            return
+
+        success, split_geometry_list, topo, cut_line = cut_polygon(nearest_feature.geometry(), nearest_edge[0], nearest_edge[1],
+                                                                   0)
+
+        if success != QgsGeometry.OperationResult.Success:
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "failed to divide")
+            return
+
+        if len(split_geometry_list) != 1:
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "failed to divide")
+            return
+
+        area_of_opposite_part = split_geometry_list[0].area()
+
+        distance = get_cut_distance_by_area_limit(nearest_feature, nearest_edge[0], nearest_edge[1], area + area_of_opposite_part)
+        log_message(str(distance))
+        self.do_cut_polygon(nearest_feature, nearest_edge, distance)
+        self._divide_by_area1_button_clicked = False
+
+    # point 's type QgsPointXY
+    def divide_by_distance1(self, point):
+        nearest_edge = self.get_nearest_edge_in_target_layer(point)
+
+        if nearest_edge is None:
+            QMessageBox.critical(self._iface.mainWindow(), 'Error',
+                                 "fails to find nearest edge. please select edge within polygon of " + TARGET_LAYER_NAME + " layer")
+            return
 
         self.mark_reference_line(nearest_edge)
         distance, ok = QInputDialog.getDouble(self._iface.mainWindow(), "Input", "enter a distance")
@@ -309,10 +385,7 @@ class QGISEditTools:
             self.hide_all_marker_rubber_band()
             return
 
-        layers = QgsProject.instance().mapLayersByName(PARCEL_LAYER_NAME)
-        parcel_layer = layers[0]
-        selected_features = parcel_layer.selectedFeatures()
-        nearest_feature = find_nearest_feature_from_features(QgsGeometry.fromPointXY(point), selected_features)
+        nearest_feature = self.get_nearest_feature_in_parcel_layer(point)
 
         self.do_cut_polygon(nearest_feature, nearest_edge, distance)
         self._divide_by_distance1_button_clicked = False
@@ -414,6 +487,13 @@ class QGISEditTools:
             return
 
         self._divide_by_area_button_clicked = True
+        self.map_canvas.setMapTool(self.reference_line_selector)
+
+    def on_action_divide_by_area1(self):
+        if not self.check_polygon_divide_condition():
+            return
+
+        self._divide_by_area1_button_clicked = True
         self.map_canvas.setMapTool(self.reference_line_selector)
 
 

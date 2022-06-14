@@ -1,5 +1,11 @@
 # Change Log
 
+### 1.0.5 - 2022-06-14
+
+#### Updated
+
+-   Improvement - Not overlapping with existing features. [3#issuecomment-1155150292](https://github.com/3DGISKing/QGISEditTools/issues/3#issuecomment-1155150292)
+
 ### 1.0.4 - 2022-06-13
 
 #### Updated
