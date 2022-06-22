@@ -1,5 +1,11 @@
 # Change Log
 
+### 1.0.6 - 2022-06-22
+
+#### Updated
+
+-   fixing invalid polygon geometry. [4](https://github.com/3DGISKing/QGISEditTools/issues/4)
+
 ### 1.0.5 - 2022-06-14
 
 #### Updated

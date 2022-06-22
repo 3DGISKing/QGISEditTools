@@ -26,7 +26,8 @@ from PyQt5 import QtGui, QtWidgets
 from qgis.core import QgsWkbTypes
 from qgis.core import QgsVectorLayer
 from qgis.core import QgsProject, QgsMessageLog, QgsFeature, QgsGeometry, QgsField, QgsVectorLayerUtils,QgsRectangle
-from .util import get_cut_distance_by_area_limit, cut_polygon, distance_between_two_points, find_nearest_feature_from_features, find_nearest_edge_from_multi_polygon,find_perpendicular_point, generate_intersects, log_message
+from .util import get_cut_distance_by_area_limit, cut_polygon, distance_between_two_points, find_nearest_feature_from_features,\
+    find_nearest_edge_from_multi_polygon,find_perpendicular_point, generate_intersects, log_message, get_fixed_polygon_geometry
 
 TARGET_LAYER_NAME = "plantaciones"
 PARCEL_LAYER_NAME = "parcelas"
@@ -178,6 +179,7 @@ class QGISEditTools:
         if not self.check_polygon_divide_condition():
             return
 
+        self.reset()
         self._divide_by_distance_button_clicked = True
         self.map_canvas.setMapTool(self.reference_line_selector)
 
@@ -188,6 +190,7 @@ class QGISEditTools:
         if not self.check_polygon_divide_condition():
             return
 
+        self.reset()
         self._divide_by_distance1_button_clicked = True
         self.map_canvas.setMapTool(self.reference_line_selector)
 
@@ -443,7 +446,7 @@ class QGISEditTools:
 
         if new_geometry.isEmpty() or new_geometry.area() < 0.1:
             self.hide_all_marker_rubber_band()
-            QMessageBox.critical(self._iface.mainWindow(), 'Error', "Invalid geometry")
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "Invalid geometry. It's empty or too small")
             return
 
         if not new_geometry.isGeosValid():
@@ -451,18 +454,38 @@ class QGISEditTools:
             QMessageBox.critical(self._iface.mainWindow(), 'Error', "Invalid geometry")
             return
 
+        fixed_geometry1 = get_fixed_polygon_geometry(new_geometry, nearest_edge, True)
+        fixed_geometry2 = get_fixed_polygon_geometry(new_geometry, nearest_edge, False)
+
+        fixed_geometry = fixed_geometry1
+
+        if fixed_geometry2.area() > fixed_geometry1.area():
+            fixed_geometry = fixed_geometry2
+
+        if fixed_geometry is None:
+            self.hide_all_marker_rubber_band()
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "Failed to fix geometry error")
+            return
+
+        if fixed_geometry.isEmpty() or fixed_geometry.area() < 0.1:
+            self.hide_all_marker_rubber_band()
+            QMessageBox.critical(self._iface.mainWindow(), 'Error', "Invalid fixed_geometry. It's empty or too small")
+            return
+
+        log_message("area " + str(fixed_geometry.area()))
+
         target_layer.startEditing()
 
         # add new feature
         feature = QgsVectorLayerUtils.createFeature(target_layer)
 
-        feature.setGeometry(new_geometry)
+        feature.setGeometry(fixed_geometry)
         target_layer.addFeature(feature)
 
         target_layer.commitChanges()
 
         self.hide_all_marker_rubber_band()
-        self._flash_geometries(target_layer, [nearest_feature.geometry(), new_geometry])
+        self._flash_geometries(target_layer, [nearest_feature.geometry(), fixed_geometry])
 
     def _on_flash_timer_timeout(self):
         self._flash_timer.stop()
@@ -486,6 +509,7 @@ class QGISEditTools:
         if not self.check_polygon_divide_condition():
             return
 
+        self.reset()
         self._divide_by_area_button_clicked = True
         self.map_canvas.setMapTool(self.reference_line_selector)
 
@@ -493,8 +517,15 @@ class QGISEditTools:
         if not self.check_polygon_divide_condition():
             return
 
+        self.reset()
         self._divide_by_area1_button_clicked = True
         self.map_canvas.setMapTool(self.reference_line_selector)
+
+    def reset(self):
+        self._divide_by_distance_button_clicked = False
+        self._divide_by_distance1_button_clicked = False
+        self._divide_by_area_button_clicked = False
+        self._divide_by_area1_button_clicked = False
 
 
 if __name__ == '__main__':

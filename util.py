@@ -498,3 +498,158 @@ def get_cut_distance_by_area_limit(polygon_feature, start_point_of_edge, end_poi
         distance_step = distance_step / 10.0
 
     return distance
+
+# remove vertice based on half plane divided by edge
+
+def get_fixed_polygon(geometry, edge, ignore_minus_half_plane):
+    assert geometry.wkbType() == QgsWkbTypes.Polygon
+
+    start_point = edge[0]
+    end_point = edge[1]
+
+    x1 = start_point.x()
+    y1 = start_point.y()
+
+    x2 = end_point.x()
+    y2 = end_point.y()
+
+    # find the equation of line: Ax + By + C = 0
+
+    a = (y2 - y1) / (x2 - x1)
+    b = -1
+    c = y1 - a * x1
+
+    polygon = geometry.asPolygon()
+
+    fixed_polygon = []
+    for j in range(len(polygon)):
+        ring = polygon[j]
+
+        log_message(str(j) + " ring point, count:" + str(len(ring)) + "\n")
+
+        fixed_ring = []
+
+        for k in range(len(ring)):
+            point = ring[k]
+            x = point.x()
+            y = point.y()
+
+            # calculate the signed distance from point to edge
+            signed_distance = a * x + b * y + c
+            signed_distance = signed_distance / math.sqrt(a * a + b * b)
+
+            if abs(signed_distance) < 0.1:
+                log_message("x = " + str(x) + ', y = ' + str(y) + " aligned with edge")
+                fixed_ring.append(point)
+            else:
+                if signed_distance > 0:
+                    log_message("x = " + str(x) + ', y = ' + str(y) + "sign +")
+
+                    if ignore_minus_half_plane:
+                        fixed_ring.append(point)
+
+                else:
+                    if not ignore_minus_half_plane:
+                        fixed_ring.append(point)
+
+                    log_message("x = " + str(x) + ', y = ' + str(y) + "sign -")
+
+        if len(fixed_ring) > 0:
+            fixed_polygon.append(fixed_ring)
+
+    return QgsGeometry.fromPolygonXY(fixed_polygon)
+
+def get_fixed_multi_polygon(geometry, edge, ignore_minus_half_plane):
+    assert geometry.wkbType() == QgsWkbTypes.MultiPolygon
+
+    start_point = edge[0]
+    end_point = edge[1]
+
+    x1 = start_point.x()
+    y1 = start_point.y()
+
+    x2 = end_point.x()
+    y2 = end_point.y()
+
+    # find the equation of line: Ax + By + C = 0
+
+    a = (y2 - y1) / (x2 - x1)
+    b = -1
+    c = y1 - a * x1
+
+    fixed_multi_polygon = []
+
+    multi_polygon = geometry.asMultiPolygon()
+
+    polygon_count = len(multi_polygon)
+
+    log_message("polygon count " + str(polygon_count))
+
+    for i in range(polygon_count):
+        polygon = multi_polygon[i]
+
+        area = QgsGeometry.fromPolygonXY(polygon).area()
+
+        if area < 0.1:
+            log_message(str(i) + "th polygon area " + str(area) + " ignored")
+            continue
+
+        fixed_polygon = []
+        for j in range(len(polygon)):
+            ring = polygon[j]
+
+            log_message(str(i) + "th polygon " + str(j) + " ring point, count:" + str(len(ring)) + "\n")
+
+            fixed_ring = []
+
+            for k in range(len(ring)):
+                point = ring[k]
+                x = point.x()
+                y = point.y()
+
+                # calculate the signed distance from point to edge
+                signed_distance = a * x + b * y + c
+                signed_distance = signed_distance / math.sqrt(a * a + b * b)
+
+                if abs(signed_distance) < 0.1:
+                    log_message("x = " + str(x) + ', y = ' + str(y) + " aligned with edge")
+                    fixed_ring.append(point)
+                else:
+                    if signed_distance > 0:
+                        log_message("x = " + str(x) + ', y = ' + str(y) + "sign +")
+                        if ignore_minus_half_plane:
+                            fixed_ring.append(point)
+                    else:
+                        log_message("x = " + str(x) + ', y = ' + str(y) + "sign -")
+                        if not ignore_minus_half_plane:
+                            fixed_ring.append(point)
+
+            if len(fixed_ring) > 0:
+                fixed_polygon.append(fixed_ring)
+
+        if len(fixed_polygon) > 0:
+            fixed_multi_polygon.append(fixed_polygon)
+
+    return QgsGeometry.fromMultiPolygonXY(fixed_multi_polygon)
+
+def get_fixed_polygon_geometry(geometry, edge, ignore_minus_half_plane):
+    if geometry.wkbType() == QgsWkbTypes.MultiPolygon:
+        return get_fixed_multi_polygon(geometry, edge, ignore_minus_half_plane)
+    elif geometry.wkbType() == QgsWkbTypes.Polygon:
+        return get_fixed_polygon(geometry, edge, ignore_minus_half_plane)
+    elif geometry.wkbType() == QgsWkbTypes.GeometryCollection:
+        geometry_collection = geometry.asGeometryCollection()
+
+        for i in range(len(geometry_collection)):
+            sub_geometry = geometry_collection[i]
+
+            if sub_geometry.wkbType() == QgsWkbTypes.Polygon:
+                fixed_geom = get_fixed_polygon(sub_geometry, edge, ignore_minus_half_plane)
+
+                if fixed_geom is not None:
+                    return fixed_geom
+            elif sub_geometry.wkbType() == QgsWkbTypes.MultiPolygon:
+                fixed_geom = get_fixed_multi_polygon(sub_geometry, edge, ignore_minus_half_plane)
+
+                if fixed_geom is not None:
+                    return fixed_geom
